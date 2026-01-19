@@ -309,3 +309,14 @@ build_example(
     ${libapplications}
     ${libinternet}
 )
+
+build_example(
+  NAME wifi-phy-snr-pathloss
+  SOURCE_FILES wifi-phy-snr-pathloss.cc
+  LIBRARIES_TO_LINK
+    ${libwifi}
+    ${libcore}
+    ${libnetwork}
+    ${libapplications}
+    ${libinternet}
+)
