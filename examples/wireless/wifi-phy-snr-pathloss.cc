@@ -8,6 +8,7 @@
 
 #include "ns3/command-line.h"
 #include "ns3/constant-position-mobility-model.h"
+
 #include "ns3/flow-id-tag.h"
 #include "ns3/nist-error-rate-model.h"
 #include "ns3/packet.h"
@@ -15,8 +16,16 @@
 #include "ns3/propagation-loss-model.h"
 #include "ns3/simulator.h"
 #include "ns3/wifi-psdu.h"
+#include "ns3/yans-error-rate-model.h"
+#include "ns3/table-based-error-rate-model.h"
 #include "ns3/yans-wifi-channel.h"
 #include "ns3/yans-wifi-phy.h"
+#include "ns3/wifi-types.h"
+#include "ns3/wifi-utils.h"
+
+#include <fstream>
+#include <string>
+#include <cstdlib>
 
 using namespace ns3;
 
@@ -129,7 +138,9 @@ PsrExperiment::Run(PsrExperiment::Input input)
     Ptr<InterferenceHelper> rxInterferenceHelper = CreateObject<InterferenceHelper>();
     rx->SetInterferenceHelper(rxInterferenceHelper);
     
-    Ptr<ErrorRateModel> error = CreateObject<NistErrorRateModel>();
+    // Ptr<ErrorRateModel> error = CreateObject<NistErrorRateModel>();
+    // Ptr<YansErrorRateModel> error = CreateObject<YansErrorRateModel>();
+    Ptr<TableBasedErrorRateModel> error = CreateObject<TableBasedErrorRateModel>();
     tx->SetErrorRateModel(error);
     rx->SetErrorRateModel(error);
     tx->SetChannel(channel);
@@ -342,6 +353,180 @@ CollisionExperiment::Run(CollisionExperiment::Input input)
     return m_output;
 }
 
+/// SnrVsPsrExperiment
+class SnrVsPsrExperiment
+{
+  public:
+    /// Input structure
+    struct Input
+    {
+        Input();
+        std::string txMode;   ///< transmit mode (MCS)
+        uint8_t txPowerLevel; ///< transmit power level
+        uint32_t packetSize;  ///< packet size
+        uint32_t nPackets;    ///< number of packets
+        double targetSnr;     ///< target SNR in dB
+    };
+
+    /// Output structure
+    struct Output
+    {
+        uint32_t received;     ///< received packets count
+        double avgSnr;         ///< average SNR in linear scale
+        double avgRssi;        ///< average RSSI in dBm
+        double packetErrorRate; ///< packet error rate
+    };
+
+    SnrVsPsrExperiment();
+
+    /**
+     * Run function
+     * @param input the SNR vs PSR experiment input
+     * @returns the SNR vs PSR experiment output
+     */
+    SnrVsPsrExperiment::Output Run(SnrVsPsrExperiment::Input input);
+
+  private:
+    /// Send function
+    void Send();
+    /**
+     * Receive function
+     * @param psdu the PSDU
+     * @param rxSignalInfo the info on the received signal (ee RxSignalInfo)
+     * @param txVector the wifi transmit vector
+     * @param statusPerMpdu reception status per MPDU
+     */
+    void Receive(Ptr<const WifiPsdu> psdu,
+                 RxSignalInfo rxSignalInfo,
+                 const WifiTxVector& txVector,
+                 const std::vector<bool>& statusPerMpdu);
+    Ptr<WifiPhy> m_tx; ///< transmit PHY
+    Input m_input;     ///< input parameters
+    Output m_output;   ///< output results
+    double m_totalSnr; ///< total SNR for average calculation
+    double m_totalRssi;///< total RSSI for average calculation
+};
+
+void
+SnrVsPsrExperiment::Send()
+{
+    Ptr<WifiPsdu> psdu = Create<WifiPsdu>(Create<Packet>(m_input.packetSize), WifiMacHeader());
+    WifiMode mode = WifiMode(m_input.txMode);
+    WifiTxVector txVector;
+    txVector.SetTxPowerLevel(m_input.txPowerLevel);
+    txVector.SetMode(mode);
+    txVector.SetPreambleType(WIFI_PREAMBLE_LONG);
+    m_tx->Send(psdu, txVector);
+}
+
+void
+SnrVsPsrExperiment::Receive(Ptr<const WifiPsdu> psdu,
+                           RxSignalInfo rxSignalInfo,
+                           const WifiTxVector& txVector,
+                           const std::vector<bool>& statusPerMpdu)
+{
+    m_output.received++;
+    m_totalSnr += rxSignalInfo.snr;
+    m_totalRssi += rxSignalInfo.rssi;
+}
+
+SnrVsPsrExperiment::SnrVsPsrExperiment()
+{
+}
+
+SnrVsPsrExperiment::Input::Input()
+    : txMode("OfdmRate6Mbps"),
+      txPowerLevel(1),
+      packetSize(2304),
+      nPackets(400),
+      targetSnr(10.0) // Default target SNR in dB
+{
+}
+
+SnrVsPsrExperiment::Output
+SnrVsPsrExperiment::Run(SnrVsPsrExperiment::Input input)
+{
+    m_output.received = 0;
+    m_totalSnr = 0.0;
+    m_totalRssi = 0.0;
+    m_input = input;
+
+    // Default noise power in dBm (typical value)
+    const double defaultNoisePowerDbm = -90.0;
+    
+    // Adjust target SNR by a fixed offset to match actual results
+    // Actual SNR is ~4dB higher than target, so subtract 4dB from target
+    const double SNR_OFFSET = 4.0;
+    double adjustedSnr = m_input.targetSnr - SNR_OFFSET;
+    
+    // Calculate required signal power in dBm for adjusted SNR
+    double signalPowerDbm = defaultNoisePowerDbm + adjustedSnr;
+
+    Ptr<YansWifiChannel> channel = CreateObject<YansWifiChannel>();
+    channel->SetPropagationDelayModel(CreateObject<ConstantSpeedPropagationDelayModel>());
+    
+    // Use FixedRssLossModel to set the calculated signal power
+    Ptr<FixedRssLossModel> fixedLoss = CreateObject<FixedRssLossModel>();
+    fixedLoss->SetRss(dBm_u(signalPowerDbm));
+    channel->SetPropagationLossModel(fixedLoss);
+
+    Ptr<MobilityModel> posTx = CreateObject<ConstantPositionMobilityModel>();
+    posTx->SetPosition(Vector(0.0, 0.0, 0.0));
+    Ptr<MobilityModel> posRx = CreateObject<ConstantPositionMobilityModel>();
+    posRx->SetPosition(Vector(1.0, 0.0, 0.0)); // Fixed position, distance irrelevant
+
+    Ptr<YansWifiPhy> tx = CreateObject<YansWifiPhy>();
+    Ptr<YansWifiPhy> rx = CreateObject<YansWifiPhy>();
+    
+    // Create and set InterferenceHelper for both PHY objects
+    Ptr<InterferenceHelper> txInterferenceHelper = CreateObject<InterferenceHelper>();
+    tx->SetInterferenceHelper(txInterferenceHelper);
+    
+    Ptr<InterferenceHelper> rxInterferenceHelper = CreateObject<InterferenceHelper>();
+    rx->SetInterferenceHelper(rxInterferenceHelper);
+    
+    // Ptr<ErrorRateModel> error = CreateObject<NistErrorRateModel>();
+    // Ptr<YansErrorRateModel> error = CreateObject<YansErrorRateModel>();
+    Ptr<TableBasedErrorRateModel> error = CreateObject<TableBasedErrorRateModel>();
+    tx->SetErrorRateModel(error);
+    rx->SetErrorRateModel(error);
+    tx->SetChannel(channel);
+    rx->SetChannel(channel);
+    tx->SetMobility(posTx);
+    rx->SetMobility(posRx);
+
+    tx->ConfigureStandard(WIFI_STANDARD_80211a);
+    rx->ConfigureStandard(WIFI_STANDARD_80211a);
+
+    rx->SetReceiveOkCallback(MakeCallback(&SnrVsPsrExperiment::Receive, this));
+
+    // Schedule packet transmissions
+    for (uint32_t i = 0; i < m_input.nPackets; ++i)
+    {
+        Simulator::Schedule(Seconds(i), &SnrVsPsrExperiment::Send, this);
+    }
+    m_tx = tx;
+    Simulator::Run();
+    Simulator::Destroy();
+    
+    // Calculate average SNR and RSSI
+    if (m_output.received > 0)
+    {
+        m_output.avgSnr = m_totalSnr / m_output.received;
+        m_output.avgRssi = m_totalRssi / m_output.received;
+    }
+    else
+    {
+        m_output.avgSnr = 0.0;
+        m_output.avgRssi = 0.0;
+    }
+    
+    // Calculate packet error rate
+    m_output.packetErrorRate = 1.0 - (static_cast<double>(m_output.received) / m_input.nPackets);
+    
+    return m_output;
+}
+
 static void
 PrintPsr(int argc, char* argv[])
 {
@@ -503,6 +688,95 @@ PrintPsrVsCollisionInterval(int argc, char* argv[])
     }
 }
 
+static void
+PrintSnrVsPer(int argc, char* argv[])
+{
+    SnrVsPsrExperiment::Input input;
+    CommandLine cmd(__FILE__);
+    
+    // SNR test range parameters
+    double startSnr = 0.0;   // Start SNR in dB
+    double snrStep = 2.0;    // SNR step in dB
+    double endSnr = 20.0;    // End SNR in dB
+    
+    // Output directory
+    std::string outputDir = "/home/emu/dev/RealEmu-test/mcs-ns3";
+    
+    cmd.AddValue("PacketSize", "The size of each packet sent", input.packetSize);
+    cmd.AddValue("TxMode", "The mode to use to send each packet", input.txMode);
+    cmd.AddValue("NPackets", "The number of packets to send", input.nPackets);
+    cmd.AddValue("TxPowerLevel",
+                 "The power level index to use to send each packet",
+                 input.txPowerLevel);
+    cmd.AddValue("StartSnr", "Start SNR in dB", startSnr);
+    cmd.AddValue("SnrStep", "SNR step between test points in dB", snrStep);
+    cmd.AddValue("EndSnr", "End SNR in dB", endSnr);
+    cmd.AddValue("OutputDir", "Directory to save output CSV files", outputDir);
+    cmd.Parse(argc, argv);
+
+    // Define different MCS modes to test
+    std::vector<std::string> mcsModes = {
+        "OfdmRate6Mbps",  // MCS 0
+        "OfdmRate9Mbps",  // MCS 1
+        "OfdmRate12Mbps", // MCS 2
+        "OfdmRate18Mbps", // MCS 3
+        "OfdmRate24Mbps", // MCS 4
+        "OfdmRate36Mbps", // MCS 5
+        "OfdmRate48Mbps", // MCS 6
+        "OfdmRate54Mbps"  // MCS 7
+    };
+
+    // Print header
+    std::cout << "TargetSNR(dB)\tActualSNR(dB)\tMCS\tReceived\tPER\tAvgRssi(dBm)" << std::endl;
+
+    // Ensure output directory exists
+    int mkdirResult = system(("mkdir -p " + outputDir).c_str());
+    if (mkdirResult != 0)
+    {
+        std::cerr << "Warning: Failed to create output directory " << outputDir << std::endl;
+    }
+
+    // Test each MCS mode at different SNR levels
+    for (size_t mcsIndex = 0; mcsIndex < mcsModes.size(); ++mcsIndex)
+    {
+        const auto& mode = mcsModes[mcsIndex];
+        
+        // Create CSV file for this MCS
+        std::string csvFilename = outputDir + "/sinr_success_rate_scaled_mcs" + std::to_string(mcsIndex) + ".csv";
+        std::ofstream csvFile(csvFilename);
+        
+        // Write CSV header
+        csvFile << "SINR(dB),SuccessRate" << std::endl;
+        
+        for (double snr = startSnr; snr <= endSnr; snr += snrStep)
+        {
+            input.txMode = mode;
+            input.targetSnr = snr;
+            
+            SnrVsPsrExperiment experiment;
+            SnrVsPsrExperiment::Output output;
+            output = experiment.Run(input);
+            
+            // Convert actual SNR from linear to dB for display
+            double actualSnrDb = 10 * log10(output.avgSnr);
+            
+            // Calculate success rate (1 - PER)
+            double successRate = 1.0 - output.packetErrorRate;
+            
+            // Write to console
+            std::cout << snr << "\t" << actualSnrDb << "\t" << mode << "\t" << output.received << "\t";
+            std::cout << output.packetErrorRate << "\t" << output.avgRssi << std::endl;
+            
+            // Write to CSV file
+            csvFile << snr << "," << successRate << std::endl;
+        }
+        
+        // Close CSV file
+        csvFile.close();
+        std::cout << "CSV file saved: " << csvFilename << std::endl;
+    }
+}
+
 int
 main(int argc, char* argv[])
 {
@@ -512,7 +786,8 @@ main(int argc, char* argv[])
                   << "Psr "
                   << "SizeVsRange "
                   << "PsrVsDistance "
-                  << "PsrVsCollisionInterval " << std::endl;
+                  << "PsrVsCollisionInterval "
+                  << "SnrVsPer " << std::endl;
         return 0;
     }
     std::string type = argv[1];
@@ -534,6 +809,10 @@ main(int argc, char* argv[])
     else if (type == "PsrVsCollisionInterval")
     {
         PrintPsrVsCollisionInterval(argc, argv);
+    }
+    else if (type == "SnrVsPer")
+    {
+        PrintSnrVsPer(argc, argv);
     }
     else
     {
