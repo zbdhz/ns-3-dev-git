@@ -107,7 +107,7 @@ PsrExperiment::Input::Input()
     : distance(5.0),
       txMode("OfdmRate6Mbps"),
       txPowerLevel(1),
-      packetSize(2304),
+      packetSize(1000),
       nPackets(400)
 {
 }
@@ -139,8 +139,8 @@ PsrExperiment::Run(PsrExperiment::Input input)
     rx->SetInterferenceHelper(rxInterferenceHelper);
     
     // Ptr<ErrorRateModel> error = CreateObject<NistErrorRateModel>();
-    // Ptr<YansErrorRateModel> error = CreateObject<YansErrorRateModel>();
-    Ptr<TableBasedErrorRateModel> error = CreateObject<TableBasedErrorRateModel>();
+    Ptr<YansErrorRateModel> error = CreateObject<YansErrorRateModel>();
+    // Ptr<TableBasedErrorRateModel> error = CreateObject<TableBasedErrorRateModel>();
     tx->SetErrorRateModel(error);
     rx->SetErrorRateModel(error);
     tx->SetChannel(channel);
@@ -437,8 +437,8 @@ SnrVsPsrExperiment::SnrVsPsrExperiment()
 SnrVsPsrExperiment::Input::Input()
     : txMode("OfdmRate6Mbps"),
       txPowerLevel(1),
-      packetSize(2304),
-      nPackets(400),
+      packetSize(1000),
+      nPackets(10000),
       targetSnr(10.0) // Default target SNR in dB
 {
 }
@@ -485,9 +485,9 @@ SnrVsPsrExperiment::Run(SnrVsPsrExperiment::Input input)
     Ptr<InterferenceHelper> rxInterferenceHelper = CreateObject<InterferenceHelper>();
     rx->SetInterferenceHelper(rxInterferenceHelper);
     
-    // Ptr<ErrorRateModel> error = CreateObject<NistErrorRateModel>();
+    Ptr<ErrorRateModel> error = CreateObject<NistErrorRateModel>();
     // Ptr<YansErrorRateModel> error = CreateObject<YansErrorRateModel>();
-    Ptr<TableBasedErrorRateModel> error = CreateObject<TableBasedErrorRateModel>();
+    // Ptr<TableBasedErrorRateModel> error = CreateObject<TableBasedErrorRateModel>();
     tx->SetErrorRateModel(error);
     rx->SetErrorRateModel(error);
     tx->SetChannel(channel);
@@ -695,12 +695,12 @@ PrintSnrVsPer(int argc, char* argv[])
     CommandLine cmd(__FILE__);
     
     // SNR test range parameters
-    double startSnr = 0.0;   // Start SNR in dB
-    double snrStep = 2.0;    // SNR step in dB
-    double endSnr = 20.0;    // End SNR in dB
+    double startSnr = -4.0;   // Start SNR in dB
+    double snrStep = 0.03125;    // SNR step in dB
+    double endSnr = 25.0;    // End SNR in dB
     
     // Output directory
-    std::string outputDir = "/home/emu/dev/RealEmu-test/mcs-ns3";
+    std::string outputDir = "/home/emu/dev/RealEmu-test/mcs/ns3-new";
     
     cmd.AddValue("PacketSize", "The size of each packet sent", input.packetSize);
     cmd.AddValue("TxMode", "The mode to use to send each packet", input.txMode);

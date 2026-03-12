@@ -2864,7 +2864,7 @@ main(int argc, char* argv[])
     uint32_t nMaxStas = 50; ///< Maximum number of STAs to end with
     uint32_t nStepSize = 5; ///< Number of stations to add at each step
     uint32_t verbose = 0;   ///< verbosity level that increases the number of debugging traces
-    double duration = 100; ///< duration (in seconds) of each simulation run (i.e. per trial and per
+    double duration = 10; ///< duration (in seconds) of each simulation run (i.e. per trial and per
                            ///< number of stations)
     uint32_t trials = 1;   ///< Number of runs per point in the plot
     bool pcap = false;     ///< Flag to enable/disable PCAP files generation
@@ -2890,13 +2890,15 @@ main(int argc, char* argv[])
     meter_u distance = 0.001; ///< The distance in meters between the AP and the STAs
     dBm_u apTxPower{16};      ///< The transmit power of the AP (if infrastructure only)
     dBm_u staTxPower{16};     ///< The transmit power of each STA (or all STAs if adhoc)
-
-    // Disable fragmentation and RTS/CTS
-    Config::SetDefault("ns3::WifiRemoteStationManager::FragmentationThreshold",
-                       StringValue("22000"));
-    Config::SetDefault("ns3::WifiRemoteStationManager::RtsCtsThreshold", StringValue("22000"));
+    uint32_t rtsCtsThreshold = 22000; ///< The RTS/CTS threshold in bytes (22000 to disable, lower to enable)
+    uint8_t aifsn = 1; ///< The number of slots that make up an AIFS
     // Make CW stay equal to CWmax until a packet is acknowledged
-    Config::SetDefault("ns3::WifiMac::FrameRetryLimit", UintegerValue(65535));
+    // 在 CommandLine 定义后添加
+    uint32_t minCw = 15;    // 默认最小CW
+    uint32_t maxCw = 127;  // 默认63
+
+
+    Config::SetDefault("ns3::WifiMac::FrameRetryLimit", UintegerValue(6));//修订
     // Set maximum queue size to the largest value and set maximum queue delay to be larger than the
     // simulation time
     Config::SetDefault(
@@ -2951,7 +2953,39 @@ main(int argc, char* argv[])
                  "Set the transmit power of each STA in dBm (or all STAs if adhoc)",
                  staTxPower);
     cmd.AddValue("pktInterval", "Set the socket packet interval in microseconds", pktInterval);
+    cmd.AddValue("rtsCtsThreshold",
+                 "Set the RTS/CTS threshold in bytes (22000 to disable, lower to enable)",
+                 rtsCtsThreshold);
+    cmd.AddValue("aifsn", "Set the number of slots that make up an AIFS", aifsn);
+    cmd.AddValue("minCw", "Minimum contention window size", minCw);
+    cmd.AddValue("maxCw", "Maximum contention window size", maxCw);
     cmd.Parse(argc, argv);
+    
+    // 配置CW窗口大小（使用Txop类的MinCws和MaxCws属性）
+    // 注意：属性名是MinCws和MaxCws（复数形式），接受UintegerValue向量
+    // Config::SetDefault("ns3::Txop::MinCws", AttributeContainerValue<UintegerValue>(UintegerValue(minCw)));
+    // Config::SetDefault("ns3::Txop::MaxCws", AttributeContainerValue<UintegerValue>(UintegerValue(maxCw)));
+    // Disable fragmentation and RTS/CTS
+    // Config::SetDefault("ns3::WifiMac::MinCws", UintegerValue(minCw));
+    // 配置SIFS和SlotTime都设置为10us
+    // SIFS = 10us
+    Config::SetDefault("ns3::WifiPhy::Sifs", TimeValue(MicroSeconds(16)));
+    // SlotTime = 10us (这样DIFS = SIFS + 2 * SlotTime = 16us + 2 * 9us = 34us)
+    Config::SetDefault("ns3::WifiPhy::Slot", TimeValue(MicroSeconds(9)));
+    // 基础CW值
+    // 使用向量容器来创建AttributeContainerValue
+    std::vector<UintegerValue> minCwsVec = {UintegerValue(minCw)};
+    std::vector<UintegerValue> maxCwsVec = {UintegerValue(maxCw)};
+    Config::SetDefault("ns3::Txop::MinCws", AttributeContainerValue<UintegerValue>(minCwsVec));
+    Config::SetDefault("ns3::Txop::MaxCws", AttributeContainerValue<UintegerValue>(maxCwsVec));
+    
+    // 配置AIFSN（仲裁帧间间隔数）
+    std::vector<UintegerValue> aifsnsVec = {UintegerValue(aifsn)};
+    Config::SetDefault("ns3::Txop::Aifsns", AttributeContainerValue<UintegerValue>(aifsnsVec));
+
+    Config::SetDefault("ns3::WifiRemoteStationManager::FragmentationThreshold",
+                       UintegerValue(22000));
+    Config::SetDefault("ns3::WifiRemoteStationManager::RtsCtsThreshold", UintegerValue(rtsCtsThreshold));
 
     if (tracing)
     {
