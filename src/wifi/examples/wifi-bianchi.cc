@@ -46,7 +46,9 @@
 #include <fstream>
 #include <iomanip>
 #include <numbers>
+#include <sstream>
 #include <vector>
+#include <chrono>
 
 /**
  * @file
@@ -70,6 +72,7 @@ std::ofstream macTxTraceFile;   ///< File that traces MAC transmissions  over ti
 std::ofstream macRxTraceFile;   ///< File that traces MAC receptions  over time
 std::ofstream
     socketSendTraceFile; ///< File that traces packets transmitted by the application  over time
+std::vector<std::string> eventLog; ///< Vector to store simulation results by node count
 
 std::map<Mac48Address, uint64_t> packetsReceived; ///< Map that stores the total packets received
                                                   ///< per STA (and addressed to that STA)
@@ -3042,15 +3045,26 @@ main(int argc, char* argv[])
     }
 
     std::stringstream ss;
+    std::string pltFilename;
     ss << "wifi-" << standard << "-p-" << pktSize << (infra ? "-infrastructure" : "-adhoc") << "-r-"
        << phyModeStr.str() << "-min-" << nMinStas << "-max-" << nMaxStas << "-step-" << nStepSize
        << "-throughput.plt";
-    std::ofstream throughputPlot(ss.str());
+    pltFilename = ss.str();
+    std::ofstream throughputPlot(pltFilename);
     ss.str("");
     ss << "wifi-" << standard << "-p-" << pktSize << (infra ? "-infrastructure" : "-adhoc") << "-r-"
        << phyModeStr.str() << "-min-" << nMinStas << "-max-" << nMaxStas << "-step-" << nStepSize
        << "-throughput.eps";
     Gnuplot gnuplot = Gnuplot(ss.str());
+    
+    // Create CSV file for simulation execution time
+    ss.str("");
+    ss << "wifi-" << standard << "-p-" << pktSize << (infra ? "-infrastructure" : "-adhoc") << "-r-"
+       << phyModeStr.str() << "-min-" << nMinStas << "-max-" << nMaxStas << "-step-" << nStepSize
+       << "-simtime.csv";
+    std::string csvFilename = ss.str();
+    std::ofstream simTimeCsv(csvFilename);
+    simTimeCsv << "Nodes,RelativeTime" << std::endl;
 
     WifiStandard wifiStandard;
     if (standard == "11a")
@@ -3188,6 +3202,7 @@ main(int argc, char* argv[])
             rxEventAbortedByTx.clear();
             associated.clear();
             throughput = 0;
+            eventLog.clear(); // Clear event log for each trial
             std::cout << "Trial " << runIndex + 1 << " of " << trials << "; " << phyModeStr.str()
                       << " for " << n << " nodes " << std::endl;
             if (tracing)
@@ -3205,6 +3220,10 @@ main(int argc, char* argv[])
                 socketSendTraceFile << "# Trial " << runIndex + 1 << " of " << trials << "; "
                                     << phyModeStr.str() << " for " << n << " nodes" << std::endl;
             }
+            
+            // Record simulation start time
+            auto simStartTime = std::chrono::high_resolution_clock::now();
+            
             experiment.Run(wifi,
                            wifiPhy,
                            wifiMac,
@@ -3219,6 +3238,22 @@ main(int argc, char* argv[])
                            apTxPower,
                            staTxPower,
                            MicroSeconds(pktInterval));
+            
+            // Record simulation end time and calculate execution time
+            auto simEndTime = std::chrono::high_resolution_clock::now();
+            auto simDuration = std::chrono::duration_cast<std::chrono::milliseconds>(simEndTime - simStartTime).count();
+            double simTimeSeconds = simDuration / 1000.0;
+            double relativeTime = simTimeSeconds / duration;
+            
+            // Log simulation execution time for this trial
+            std::stringstream simTimeLog;
+            simTimeLog << "Nodes=" << n << " Trial=" << (runIndex + 1) 
+                       << " SimTime=" << simTimeSeconds << "s" 
+                       << " RelativeTime=" << relativeTime << "x";
+            eventLog.push_back(simTimeLog.str());
+            
+            // Write to CSV file
+            simTimeCsv << n << "," << relativeTime << std::endl;
             uint32_t k = 0;
             if (bytesReceived.size() != n)
             {
@@ -3264,6 +3299,11 @@ main(int argc, char* argv[])
             throughputArray[runIndex] = throughput;
         }
         averageThroughput = averageThroughput / trials;
+
+        // Log simulation time for this node count configuration
+        std::stringstream simTimeLog;
+        simTimeLog << "Nodes=" << n << " AvgThroughput=" << averageThroughput << "Mbps";
+        eventLog.push_back(simTimeLog.str());
 
         bool rateFound = false;
         double relativeErrorDifs = 0;
@@ -3405,6 +3445,26 @@ main(int argc, char* argv[])
     gnuplot.GenerateOutput(throughputPlot);
     throughputPlot.close();
 
+    // Append event log to plt file
+    if (!eventLog.empty())
+    {
+        std::ifstream pltFile(pltFilename);
+        std::stringstream pltContent;
+        pltContent << pltFile.rdbuf();
+        pltFile.close();
+
+        std::ofstream pltFileOut(pltFilename);
+        pltFileOut << pltContent.str();
+        pltFileOut << "\n\n# Simulation Execution Time Log\n";
+        pltFileOut << "# Format: Nodes=Trial SimTime(s) RelativeTime(x)\n";
+        pltFileOut << "# RelativeTime = ActualSimulationTime / ConfiguredDuration\n";
+        for (const auto& event : eventLog)
+        {
+            pltFileOut << "# " << event << "\n";
+        }
+        pltFileOut.close();
+    }
+
     if (tracing)
     {
         cwTraceFile.close();
@@ -3414,6 +3474,9 @@ main(int argc, char* argv[])
         macRxTraceFile.close();
         socketSendTraceFile.close();
     }
+    
+    // Close CSV file
+    simTimeCsv.close();
 
     return 0;
 }
